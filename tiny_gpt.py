@@ -1,20 +1,15 @@
 """
 tiny_gpt.py
-============
-6개 노트북(bigram -> MLP -> sequence model -> attention -> GPT)을 하나로 합친
-character-level language model.
 
-각 부품이 어느 노트북에서 왔는지:
-  - NextTokenDataset        : Notebook 4 (target도 sequence: x=[t1..tT], y=[t2..t(T+1)])
-  - token/position embedding: Notebook 4
-  - Head (single attention) : Notebook 5 (masked self-attention)
-  - MultiHeadAttention      : Notebook 6
-  - FeedForward / Block     : Notebook 6 (residual + LayerNorm)
-  - TinyGPT                 : Notebook 6 (block 쌓기)
-  - train / sample 골격     : Notebook 1부터 그대로 재사용
+Character-level language model (bigram -> MLP -> sequence model -> attention -> GPT).
 
-기본값은 CPU에서도 몇 분 안에 "학습이 되는지" 확인할 수 있는 작은 설정이고,
-교수님 원본(GPU/A100)에 맞추려면 아래 BIG_CONFIG 주석을 참고하세요.
+구성:
+  - NextTokenDataset        : x=[t1..tT], y=[t2..t(T+1)] 로 매 위치의 다음 토큰 예측
+  - token / position embedding
+  - Head                    : masked self-attention 한 개
+  - MultiHeadAttention      : head 여러 개 병렬 + projection
+  - FeedForward / Block     : residual + LayerNorm 트랜스포머 블록
+  - TinyGPT                 : block 을 쌓은 최종 모델
 """
 
 from dataclasses import dataclass
@@ -31,8 +26,7 @@ from torch.utils.data import Dataset, DataLoader
 # --------------------------------------------------------------------------------------
 @dataclass
 class Config:
-    # --- 아래는 CPU에서 ~4분이면 도는 검증된 설정 ---
-    dataset: str = "sherlock"      # "sherlock"(기본, tiny Shakespeare 대체), "shakespeare", "names", 또는 파일경로/URL
+    dataset: str = "sherlock"      # "sherlock", "shakespeare", "names", 또는 파일경로/URL
     block_size: int = 32           # context 길이
     batch_size: int = 32
     emb_dim: int = 128
@@ -45,14 +39,9 @@ class Config:
     eval_steps: int = 40           # val loss 측정용 batch 수
     seed: int = 1337
 
-# 교수님 원본(GPU/A100)에 맞추려면 — Colab에서 GPU 켜고 아래로:
-#   block_size=64, emb_dim=128, num_heads=4, num_layers=4, dropout=0.1,
-#   lr=3e-4, epochs=100, steps_per_epoch=300
-# 그러면 훨씬 읽을 만한 가짜 셰익스피어가 나옵니다 (val loss ~1.5 부근).
-
 
 # --------------------------------------------------------------------------------------
-# 1. Data  (Notebook 3~6 공통)
+# 1. Data
 # --------------------------------------------------------------------------------------
 # 미리 정의된 데이터셋. 여기에 없는 것도 파일 경로나 URL을 직접 넘기면 됩니다.
 PRESETS = {
@@ -88,7 +77,7 @@ def load_data(source: str):
     return text, data, stoi, itos, vocab_size
 
 
-# x = [t1..tT], y = [t2..t(T+1)]  ->  매 위치마다 "다음 토큰" 예측 (Notebook 4)
+# x = [t1..tT], y = [t2..t(T+1)]  ->  매 위치마다 다음 토큰을 예측
 class NextTokenDataset(Dataset):
     def __init__(self, data, block_size):
         self.data = data
@@ -104,10 +93,10 @@ class NextTokenDataset(Dataset):
 
 
 # --------------------------------------------------------------------------------------
-# 2. Attention  (Notebook 5 -> 6)
+# 2. Attention
 # --------------------------------------------------------------------------------------
 class Head(nn.Module):
-    """하나의 masked self-attention head. (Notebook 5의 SingleHeadSelfAttention 일반화)"""
+    """하나의 masked self-attention head."""
     def __init__(self, emb_dim, head_size, block_size, dropout):
         super().__init__()
         self.key = nn.Linear(emb_dim, head_size, bias=False)
@@ -129,7 +118,7 @@ class Head(nn.Module):
 
 
 class MultiHeadAttention(nn.Module):
-    """여러 head를 병렬로 돌리고 합친 뒤 projection. (Notebook 6)"""
+    """여러 head를 병렬로 돌리고 합친 뒤 projection."""
     def __init__(self, emb_dim, num_heads, block_size, dropout):
         super().__init__()
         head_size = emb_dim // num_heads
@@ -145,7 +134,7 @@ class MultiHeadAttention(nn.Module):
 
 
 # --------------------------------------------------------------------------------------
-# 3. Transformer block  (Notebook 6)
+# 3. Transformer block
 # --------------------------------------------------------------------------------------
 class FeedForward(nn.Module):
     def __init__(self, emb_dim, dropout):
@@ -177,7 +166,7 @@ class Block(nn.Module):
 
 
 # --------------------------------------------------------------------------------------
-# 4. TinyGPT  (Notebook 6)
+# 4. TinyGPT
 # --------------------------------------------------------------------------------------
 class TinyGPT(nn.Module):
     def __init__(self, vocab_size, block_size, emb_dim=128, num_heads=4, num_layers=4, dropout=0.1):
@@ -204,7 +193,7 @@ class TinyGPT(nn.Module):
 
 
 # --------------------------------------------------------------------------------------
-# 5. Loss / Train / Eval  (Notebook 1의 골격을 sequence용으로)
+# 5. Loss / Train / Eval
 # --------------------------------------------------------------------------------------
 def sequence_cross_entropy(logits, targets):
     # (B,T,V) -> (B,V,T) 로 바꿔 위치별 cross entropy
@@ -243,7 +232,7 @@ def evaluate(model, loader, device, max_steps):
 
 
 # --------------------------------------------------------------------------------------
-# 6. Sampling  (Notebook 6)
+# 6. Sampling
 # --------------------------------------------------------------------------------------
 @torch.no_grad()
 def generate(model, stoi, itos, device, start_text="\n", max_new_tokens=500):
